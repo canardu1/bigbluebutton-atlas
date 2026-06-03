@@ -1,0 +1,5 @@
+{
+  "requiredSdkVersion": "~0.0.100",
+  "name": "TranscriptionTranslationPlugin",
+  "javascriptEntrypointUrl": "TranscriptionTranslationPlugin.js"
+}
