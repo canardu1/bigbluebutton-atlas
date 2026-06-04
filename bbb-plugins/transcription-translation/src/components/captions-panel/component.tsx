@@ -137,6 +137,15 @@ export function CaptionsPanel({ uuid }: CaptionsPanelProps): React.ReactElement 
   const cacheRef = useRef<Record<string, string>>({});
   const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const listRef = useRef<HTMLDivElement | null>(null);
+  const userSelectedRef = useRef(false);
+
+  // Apply defaultTargetLanguage once settings load (useState init runs before
+  // the async settings arrive), unless the viewer already picked a language.
+  useEffect(() => {
+    if (!userSelectedRef.current && settings?.defaultTargetLanguage) {
+      setTargetLang(settings.defaultTargetLanguage);
+    }
+  }, [settings?.defaultTargetLanguage]);
 
   // Load the list of supported target languages from the server (best effort).
   useEffect(() => {
@@ -164,7 +173,8 @@ export function CaptionsPanel({ uuid }: CaptionsPanelProps): React.ReactElement 
       const cacheKey = `${caption.captionId}|${targetLang}`;
 
       if (sourceCode === targetLang) {
-        if (translations[cacheKey] !== caption.captionText) {
+        if (cacheRef.current[cacheKey] !== caption.captionText) {
+          cacheRef.current[cacheKey] = caption.captionText;
           setTranslations((prev) => ({ ...prev, [cacheKey]: caption.captionText }));
         }
         return;
@@ -188,7 +198,7 @@ export function CaptionsPanel({ uuid }: CaptionsPanelProps): React.ReactElement 
           });
       }, TRANSLATE_DEBOUNCE_MS);
     });
-  }, [captions, targetLang, baseUrl, apiKey, translations]);
+  }, [captions, targetLang, baseUrl, apiKey]);
 
   // Auto-scroll to the latest caption.
   useEffect(() => {
@@ -217,7 +227,10 @@ export function CaptionsPanel({ uuid }: CaptionsPanelProps): React.ReactElement 
             style={styles.select}
             value={targetLang}
             data-test="translationTargetLanguageSelect"
-            onChange={(e) => setTargetLang(e.target.value)}
+            onChange={(e) => {
+              userSelectedRef.current = true;
+              setTargetLang(e.target.value);
+            }}
           >
             {languages.map((lang) => (
               <option key={lang.code} value={lang.code}>
