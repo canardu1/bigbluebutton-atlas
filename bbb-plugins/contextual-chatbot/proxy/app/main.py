@@ -1,13 +1,17 @@
-"""Backend proxy for the BigBlueButton contextual-chatbot plugin.
+"""Shared DeepSeek backend proxy for the BigBlueButton AI plugins.
 
-The browser plugin never sees the DeepSeek API key. It sends the student's
-question plus the lesson context (live transcript, public chat, current slide
-text) gathered client-side; this proxy merges in any teacher-provided reference
-materials for the meeting, builds the prompt, and calls the DeepSeek
-chat-completions API (OpenAI-compatible).
+The browser plugins never see the DeepSeek API key. They send the lesson
+context gathered client-side and this proxy builds the prompt and calls the
+DeepSeek chat-completions API (OpenAI-compatible).
+
+Endpoints:
+- /chat   : contextual-chatbot plugin (student question + lesson context).
+- /recap  : lesson-recap plugin (full transcript + slides -> structured
+            summary, action items and flashcards).
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -22,7 +26,9 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("DEEPSEEK_TIMEOUT", "60"))
 MAX_CONTEXT_CHARS = int(os.environ.get("CHATBOT_MAX_CONTEXT_CHARS", "8000"))
 
-app = FastAPI(title="Contextual Chatbot Proxy", version="0.1.0")
+MAX_RECAP_CHARS = int(os.environ.get("RECAP_MAX_CONTEXT_CHARS", "24000"))
+
+app = FastAPI(title="BBB DeepSeek Proxy", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +63,24 @@ class ChatReply(BaseModel):
 class MaterialsRequest(BaseModel):
     meetingId: str
     text: str
+
+
+class RecapRequest(BaseModel):
+    meetingId: Optional[str] = None
+    language: Optional[str] = None
+    transcript: Optional[str] = None
+    slides: Optional[str] = None
+
+
+class Flashcard(BaseModel):
+    question: str
+    answer: str
+
+
+class RecapReply(BaseModel):
+    summary: str
+    actionItems: list[str]
+    flashcards: list[Flashcard]
 
 
 def _clip(text: Optional[str], limit: int) -> str:
@@ -171,3 +195,134 @@ async def chat(req: ChatRequest) -> ChatReply:
         raise HTTPException(status_code=502, detail="Unexpected response from DeepSeek.") from exc
 
     return ChatReply(answer=answer)
+
+
+def _build_recap_messages(req: RecapRequest) -> list[dict[str, str]]:
+    language = (req.language or "the same language as the lesson").strip()
+
+    system = (
+        "You are an assistant that produces study material from a recorded "
+        "online lesson. You are given the full transcript of what the teacher "
+        "said and the text extracted from the lesson slides. Produce a concise "
+        "recap that helps a student review the lesson. Base everything ONLY on "
+        "the provided transcript and slides; do not invent facts that are not "
+        "supported by them. "
+        f"Write all text in this language: {language}. "
+        "Respond with a single JSON object and nothing else, using exactly this "
+        "shape: {\"summary\": string, \"actionItems\": string[], "
+        "\"flashcards\": [{\"question\": string, \"answer\": string}]}. "
+        "The summary is a short paragraph (3-6 sentences). actionItems is a list "
+        "of concrete next steps, homework or things to study (use [] if none). "
+        "flashcards is a list of 3-8 question/answer pairs covering the key "
+        "concepts. Keep questions and answers short."
+    )
+
+    transcript = _clip(req.transcript, MAX_RECAP_CHARS)
+    slides = _clip(req.slides, MAX_RECAP_CHARS)
+
+    context_parts: list[str] = []
+    if transcript:
+        context_parts.append(f"[Lesson transcript]\n{transcript}")
+    if slides:
+        context_parts.append(f"[Slides text]\n{slides}")
+    context_blob = "\n\n".join(context_parts)
+
+    user = f"Lesson material:\n{context_blob}\n\nGenerate the recap JSON now."
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _parse_recap(content: str) -> RecapReply:
+    """Parse the model output into a RecapReply, tolerating code fences."""
+    text = content.strip()
+    if text.startswith("```"):
+        # Strip a leading ```json / ``` fence and the trailing fence.
+        text = text.split("\n", 1)[1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text[: -len("```")]
+        text = text.strip()
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start : end + 1]
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502, detail="DeepSeek did not return valid recap JSON."
+        ) from exc
+
+    summary = str(data.get("summary", "")).strip()
+
+    action_items: list[str] = []
+    for item in data.get("actionItems") or []:
+        item_str = str(item).strip()
+        if item_str:
+            action_items.append(item_str)
+
+    flashcards: list[Flashcard] = []
+    for card in data.get("flashcards") or []:
+        if not isinstance(card, dict):
+            continue
+        question = str(card.get("question", "")).strip()
+        answer = str(card.get("answer", "")).strip()
+        if question and answer:
+            flashcards.append(Flashcard(question=question, answer=answer))
+
+    if not summary and not action_items and not flashcards:
+        raise HTTPException(
+            status_code=502, detail="DeepSeek returned an empty recap."
+        )
+
+    return RecapReply(summary=summary, actionItems=action_items, flashcards=flashcards)
+
+
+@app.post("/recap", response_model=RecapReply)
+async def recap(req: RecapRequest) -> RecapReply:
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(status_code=503, detail="DEEPSEEK_API_KEY is not configured on the proxy.")
+    if not (req.transcript or "").strip() and not (req.slides or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least a transcript or slide text to summarize.",
+        )
+
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": _build_recap_messages(req),
+        "stream": False,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{DEEPSEEK_BASE_URL.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach DeepSeek: {exc}") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"DeepSeek responded {response.status_code}: {response.text}",
+        )
+
+    data = response.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Unexpected response from DeepSeek.") from exc
+
+    return _parse_recap(content)
