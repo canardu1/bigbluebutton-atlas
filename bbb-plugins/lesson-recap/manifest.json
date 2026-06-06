@@ -1,0 +1,5 @@
+{
+  "requiredSdkVersion": "~0.0.100",
+  "name": "LessonRecapPlugin",
+  "javascriptEntrypointUrl": "LessonRecapPlugin.js"
+}
