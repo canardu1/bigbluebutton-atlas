@@ -1,6 +1,6 @@
 ---
 name: testing-bbb-plugins
-description: Test the custom BigBlueButton HTML5 plugins in bbb-plugins/ end-to-end without a full BBB server, by rendering the real plugin component in a mock-SDK demo harness against the real backend. Use when verifying changes to transcription-translation or contextual-chatbot.
+description: Test the custom BigBlueButton HTML5 plugins in bbb-plugins/ end-to-end without a full BBB server, by rendering the real plugin component in a mock-SDK demo harness against the real backend. Use when verifying changes to transcription-translation, contextual-chatbot or lesson-recap.
 ---
 
 # Testing BBB plugins (demo-harness E2E)
@@ -11,13 +11,18 @@ we test the **real plugin component** in a demo harness that aliases the SDK to 
 mock (`demo/mock-sdk.tsx`) feeding live fake data, while talking to the **real**
 backend.
 
+> The demo harness (`demo/mock-sdk.tsx`, `webpack.demo.js`, `html-webpack-plugin`) is **not
+> committed** to the repo — it is scaffolding created per test run. Recreate it in the plugin
+> directory (gitignored / not committed) before following the steps below.
+
 ## General pattern (applies to any plugin here)
 
 1. `cd bbb-plugins/<plugin> && npm install`
 2. Sanity: `npx tsc --noEmit`, `npm run lint`, `npm run build-bundle` must all pass.
 3. Run the backend the plugin calls (see per-plugin notes below).
 4. Start the demo harness: `npx webpack serve --config webpack.demo.js`
-   (transcription-translation → port 4702, contextual-chatbot → port 4712).
+   (transcription-translation → port 4702, contextual-chatbot → port 4712,
+   lesson-recap → port 4722).
 5. Open the port in Chrome, maximize the window, then record the run.
 
 The harness `webpack.demo.js` aliases `bigbluebutton-html-plugin-sdk` to
@@ -46,6 +51,18 @@ values — e.g. `useUiData` returns `{ locale: 'it' }` to force Italian answers,
   - Kill the proxy, ask → red bubble "The assistant is unreachable…", no crash.
 - Security check: `grep -RF "$DEEPSEEK_API_KEY" dist/ demo-dist/` must find nothing — the key must never be in a browser bundle.
 - The proxy's materials store is in-memory; restart uvicorn to reset it between runs.
+
+## lesson-recap (DeepSeek)
+
+- Shares the contextual-chatbot proxy (`POST /recap`); run it the same way, same
+  `DEEPSEEK_API_KEY`.
+- The mock SDK must stream captions **in successive windows** (BBB's `caption` view is a
+  rolling window): the panel accumulates every line it ever saw, so the recap must cover
+  early lines that are no longer in the current window.
+- Assertions: **Generate recap** returns a summary + action items + flashcards (Q/A) in the
+  UI locale; content references early-transcript topics (proves accumulation); copy-to-Markdown
+  and download `.md` produce the same structured content; with the proxy down an error state
+  appears and the panel does not crash.
 
 ## transcription-translation (LibreTranslate)
 
