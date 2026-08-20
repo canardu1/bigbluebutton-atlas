@@ -11,9 +11,8 @@ are tested in a standalone demo harness under `demo/` that aliases the plugin SD
 (`demo/mock-sdk.tsx`) feeding a live-updating fake `caption` GraphQL stream, pointed at a
 **real** LibreTranslate.
 
-The harness files (`demo/mock-sdk.tsx`, `webpack.demo.js`) are **not committed** — recreate
-them in the plugin directory before testing. See the repo-wide skill
-`.agents/skills/testing-bbb-plugins/SKILL.md` for the general pattern.
+The harness (`demo/`, `webpack.demo.js`) is committed. See the repo-wide skill
+`.agents/skills/testing-bbb-plugins/SKILL.md` for the pattern shared by all plugins.
 
 ## Setup
 
@@ -33,10 +32,9 @@ them in the plugin directory before testing. See the repo-wide skill
 2. Serve the demo (webpack dev server on :4702, auto-recompiles on source edits):
    ```bash
    cd bbb-plugins/transcription-translation
-   npx webpack serve --config webpack.demo.js
+   npm install && npm run demo
    ```
-   Open http://localhost:4702/. The harness needs `html-webpack-plugin` as a devDependency
-   (demo-only; do not commit it to the plugin's package.json unless the demo is committed).
+   Open http://localhost:4702/.
 
 ## What to verify (concrete expected values, en/it/es)
 
