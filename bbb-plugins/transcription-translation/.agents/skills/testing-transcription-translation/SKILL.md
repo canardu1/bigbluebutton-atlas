@@ -11,6 +11,10 @@ are tested in a standalone demo harness under `demo/` that aliases the plugin SD
 (`demo/mock-sdk.tsx`) feeding a live-updating fake `caption` GraphQL stream, pointed at a
 **real** LibreTranslate.
 
+The harness files (`demo/mock-sdk.tsx`, `webpack.demo.js`) are **not committed** — recreate
+them in the plugin directory before testing. See the repo-wide skill
+`.agents/skills/testing-bbb-plugins/SKILL.md` for the general pattern.
+
 ## Setup
 
 1. Start LibreTranslate (Docker). Restrict languages for speed:
