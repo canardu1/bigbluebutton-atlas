@@ -70,10 +70,21 @@ constants at the top of the mock — e.g. `LOCALE = 'it'` forces Italian answers
   `stroma`, present in `demo/slide-2.txt` but in no transcript line) — that single word proves
   the slide-text fetch, not just the caption stream.
 - The download lands in `~/Downloads/<MeetingName>-recap.md` (e.g. `Biology_101-recap.md`); read
-  it with the shell to diff against the on-screen recap.
+  it with the shell to diff against the on-screen recap. In meeting mode the suffix is
+  `-minutes.md`.
 - Chrome's async clipboard is NOT visible to `xclip`/`xsel` in this environment. To verify
   **Copy Markdown**, open a new tab and paste into the address bar (Ctrl+T, Ctrl+V) and read
   the pasted text from the screenshot.
+
+### Meeting-minutes mode
+
+- `http://localhost:4722/?scenario=meeting` loads the work-meeting fixture (transcript with
+  owners and deadlines, `defaultRecapMode: 'meeting'`), so the panel opens on **Meeting**.
+- Assertions: the panel titles itself *Meeting minutes*, shows a **Decisions** section and no
+  flashcards; action items carry `Owner: …` / `Due: …` (e.g. Marco / Friday, Giulia before the
+  release) taken from the transcript, and items with no named owner show no owner line;
+  the Markdown export has a `## Decisions` list and a `| Task | Owner | Due |` table.
+- Switching the Lesson/Meeting toggle clears the previous output, so regenerate after switching.
 
 ## transcription-translation (LibreTranslate)
 

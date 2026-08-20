@@ -7,6 +7,8 @@ export interface PluginSettings {
   recapProxyUrl?: string;
   /** Backwards-compatible alias: the chatbot plugin uses the same proxy. */
   chatbotProxyUrl?: string;
+  /** Which output the panel starts with: "lesson" (default) or "meeting". */
+  defaultRecapMode?: 'lesson' | 'meeting';
 }
 
 export interface Flashcard {
@@ -14,8 +16,15 @@ export interface Flashcard {
   answer: string;
 }
 
+export interface ActionItem {
+  text: string;
+  owner?: string;
+  due?: string;
+}
+
 export interface RecapData {
   summary: string;
-  actionItems: string[];
+  decisions: string[];
+  actionItems: ActionItem[];
   flashcards: Flashcard[];
 }

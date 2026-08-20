@@ -1,13 +1,23 @@
 # Lesson Recap plugin (DeepSeek)
 
-A BigBlueButton 3.0 plugin that, at the end of a lesson, generates a structured
-**recap** from what actually happened in the session:
+A BigBlueButton 3.0 plugin that, at the end of a session, generates a structured
+write-up of what actually happened. It has two modes, switchable from the panel
+header:
+
+**Lesson** (study material):
 
 - a concise **summary**,
 - a list of **action items** (homework, next steps),
-- a set of **flashcards** (question / answer) for revision,
+- a set of **flashcards** (question / answer) for revision.
 
-with **copy to Markdown** and **download as `.md`**.
+**Meeting** (minutes of a work call):
+
+- a concise **summary**,
+- the **decisions** taken,
+- **action items** with **owner** and **due date**, as stated in the call.
+
+Both modes support **copy to Markdown** and **download as `.md`** (the meeting
+export renders the action items as a `| Task | Owner | Due |` table).
 
 The recap is produced by DeepSeek. The API key never reaches the browser: the
 plugin talks to the same backend **proxy** used by the contextual-chatbot
@@ -26,9 +36,12 @@ lesson:
 - the extracted text of every slide that is shown is fetched and stored (keyed
   by its text URL).
 
-When the user clicks **Generate recap**, the accumulated transcript + slides are
-sent to the proxy's `/recap` endpoint, which prompts DeepSeek for structured
-JSON (`{ summary, actionItems[], flashcards[{question, answer}] }`).
+When the user clicks **Generate recap** / **Generate minutes**, the accumulated
+transcript + slides are sent to the proxy's `/recap` endpoint, which prompts
+DeepSeek for structured JSON
+(`{ summary, decisions[], actionItems[{text, owner, due}], flashcards[] }`).
+The `mode` field selects the prompt: `lesson` fills the flashcards and leaves
+`decisions` empty, `meeting` does the opposite.
 
 ## Backend proxy
 
@@ -50,6 +63,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 {
   "meetingId": "abc",
   "language": "it",
+  "mode": "meeting",
   "transcript": "full accumulated transcript...",
   "slides": "all slide texts..."
 }
@@ -60,7 +74,8 @@ Response:
 ```json
 {
   "summary": "…",
-  "actionItems": ["…"],
+  "decisions": ["…"],
+  "actionItems": [{ "text": "…", "owner": "Marco", "due": "Friday" }],
   "flashcards": [{ "question": "…", "answer": "…" }]
 }
 ```
@@ -83,3 +98,4 @@ meeting create parameters (same mechanism as the other plugins in this repo).
 | ---------------- | ------------------------ | -------------------------------------------- |
 | `recapProxyUrl`  | `http://localhost:8000`  | Base URL of the DeepSeek proxy backend.      |
 | `chatbotProxyUrl`| –                        | Fallback if `recapProxyUrl` is not set (the chatbot and recap plugins share one proxy). |
+| `defaultRecapMode`| `lesson`                | Mode the panel opens on: `lesson` or `meeting`. |

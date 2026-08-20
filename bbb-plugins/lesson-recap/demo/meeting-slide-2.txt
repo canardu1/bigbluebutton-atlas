@@ -1,0 +1,4 @@
+Release plan
+Freeze window: from 2026-10-28 to the end of October.
+The legacy API stays online for the integrations of the retail partners.
+Load tests must run on staging with peak traffic of 1200 orders per minute.
