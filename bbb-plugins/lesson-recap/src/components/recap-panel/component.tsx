@@ -18,6 +18,7 @@ import {
   fetchSlideText,
   recapToMarkdown,
   RecapData,
+  RecapMode,
 } from '../../services/recap';
 import { RecapPanelProps, PluginSettings } from './types';
 
@@ -88,6 +89,30 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #e2e8f0',
     borderRadius: '0.4rem',
     padding: '0.5rem',
+  },
+  modeSwitch: {
+    display: 'flex',
+    gap: '0.25rem',
+  },
+  modeButton: {
+    flex: 1,
+    padding: '0.25rem 0.4rem',
+    borderRadius: '0.3rem',
+    border: '1px solid #cbd5e1',
+    background: '#ffffff',
+    color: '#475569',
+    fontSize: '0.72rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  modeButtonActive: {
+    background: '#2563eb',
+    borderColor: '#2563eb',
+    color: '#ffffff',
+  },
+  actionItemMeta: {
+    fontSize: '0.7rem',
+    color: '#64748b',
   },
   actionList: {
     margin: 0,
@@ -202,6 +227,10 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
   const [slides, setSlides] = useState('');
   const [slideCount, setSlideCount] = useState(0);
 
+  // Plugin settings arrive asynchronously, so the configured default is applied
+  // once they land — unless the user has already picked a mode.
+  const modePickedByUserRef = useRef(false);
+  const [mode, setMode] = useState<RecapMode>('lesson');
   const [recap, setRecap] = useState<RecapData | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,8 +238,14 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
   const [status, setStatus] = useState<string | null>(null);
 
   const meetingId = meetingData?.data?.meetingId || 'unknown-meeting';
-  const meetingName = meetingData?.data?.name || 'Lesson recap';
+  const isMeeting = mode === 'meeting';
+  const meetingName = meetingData?.data?.name || (isMeeting ? 'Meeting minutes' : 'Lesson recap');
   const language = toIsoLanguage(currentLocale?.locale);
+
+  const defaultMode = settings?.defaultRecapMode;
+  useEffect(() => {
+    if (defaultMode && !modePickedByUserRef.current) setMode(defaultMode);
+  }, [defaultMode]);
 
   useEffect(() => {
     const map = transcriptMapRef.current;
@@ -267,26 +302,27 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
         language,
         transcript,
         slides,
+        mode,
       });
       setRecap(result);
     } catch (err) {
       pluginLogger.error('Recap generation failed', err);
-      setError('Could not generate the recap. Check that the proxy URL in the plugin settings is reachable.');
+      setError('Could not generate the output. Check that the proxy URL in the plugin settings is reachable.');
     } finally {
       setGenerating(false);
     }
   };
 
   const markdown = useMemo(
-    () => (recap ? recapToMarkdown(recap, meetingName) : ''),
-    [recap, meetingName],
+    () => (recap ? recapToMarkdown(recap, meetingName, mode) : ''),
+    [recap, meetingName, mode],
   );
 
   const handleCopy = async (): Promise<void> => {
     if (!markdown) return;
     try {
       await navigator.clipboard.writeText(markdown);
-      setStatus('Recap copied to clipboard.');
+      setStatus('Copied to clipboard as Markdown.');
     } catch (err) {
       pluginLogger.error('Copy to clipboard failed', err);
       setError('Clipboard is not available in this browser.');
@@ -299,30 +335,57 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${meetingName.replace(/[^\w-]+/g, '_')}-recap.md`;
+    link.download = `${meetingName.replace(/[^\w-]+/g, '_')}-${isMeeting ? 'minutes' : 'recap'}.md`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    setStatus('Recap downloaded as Markdown.');
+    setStatus('Downloaded as Markdown.');
   };
 
   const toggleCard = (index: number): void => {
     setFlipped((prev) => ({ ...prev, [index]: !prev[index] }));
   };
 
+  const handleModeChange = (next: RecapMode): void => {
+    if (next === mode) return;
+    modePickedByUserRef.current = true;
+    setMode(next);
+    setRecap(null);
+    setStatus(null);
+    setFlipped({});
+  };
+
+  const output = isMeeting ? 'minutes' : 'recap';
   const generateLabel = (() => {
     if (generating) return 'Generating…';
-    return recap ? 'Regenerate recap' : 'Generate recap';
+    return `${recap ? 'Regenerate' : 'Generate'} ${output}`;
   })();
 
   return (
     <div style={styles.wrapper}>
       <div style={styles.header}>
-        <span style={styles.title}>Lesson recap</span>
+        <span style={styles.title}>{isMeeting ? 'Meeting minutes' : 'Lesson recap'}</span>
         <span style={styles.meta}>
-          Summarises the whole lesson from the accumulated transcript and slides.
+          {isMeeting
+            ? 'Turns the whole call into minutes: decisions and who does what by when.'
+            : 'Summarises the whole lesson from the accumulated transcript and slides.'}
         </span>
+        <div style={styles.modeSwitch}>
+          {(['lesson', 'meeting'] as RecapMode[]).map((value) => (
+            <button
+              key={value}
+              type="button"
+              style={{
+                ...styles.modeButton,
+                ...(mode === value ? styles.modeButtonActive : {}),
+              }}
+              onClick={() => handleModeChange(value)}
+            >
+              {value === 'lesson' ? 'Lesson' : 'Meeting'}
+            </button>
+          ))}
+        </div>
         <div style={styles.stats}>
           <span>{`${transcriptLines} transcript line(s)`}</span>
           <span>{`${slideCount} slide(s) captured`}</span>
@@ -335,8 +398,10 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
         {!recap && !error && (
           <div style={styles.empty}>
             {hasContext
-              ? 'Click “Generate recap” to build a summary, action items and flashcards from the lesson so far.'
-              : 'Waiting for lesson content… the recap will use the transcript and slides captured during the session.'}
+              ? `Click “${generateLabel}” to build ${isMeeting
+                ? 'a summary, the decisions taken and the action items of the call so far.'
+                : 'a summary, action items and flashcards from the lesson so far.'}`
+              : `Waiting for content… the ${output} will use the transcript and slides captured during the session.`}
           </div>
         )}
 
@@ -347,19 +412,44 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
               <div style={styles.summary}>{recap.summary || 'No summary available.'}</div>
             </div>
 
+            {isMeeting && (
+              <div>
+                <div style={styles.sectionTitle}>{`Decisions (${recap.decisions.length})`}</div>
+                {recap.decisions.length === 0 ? (
+                  <div style={styles.meta}>No decisions were recorded.</div>
+                ) : (
+                  <ul style={styles.actionList}>
+                    {recap.decisions.map((decision) => (
+                      <li key={decision}>{decision}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <div>
               <div style={styles.sectionTitle}>{`Action items (${recap.actionItems.length})`}</div>
               {recap.actionItems.length === 0 ? (
                 <div style={styles.meta}>No action items were identified.</div>
               ) : (
                 <ul style={styles.actionList}>
-                  {recap.actionItems.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
+                  {recap.actionItems.map((item) => {
+                    const meta = [
+                      item.owner ? `Owner: ${item.owner}` : null,
+                      item.due ? `Due: ${item.due}` : null,
+                    ].filter(Boolean).join(' · ');
+                    return (
+                      <li key={item.text}>
+                        <div>{item.text}</div>
+                        {meta && <div style={styles.actionItemMeta}>{meta}</div>}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
 
+            {!isMeeting && (
             <div>
               <div style={styles.sectionTitle}>{`Flashcards (${recap.flashcards.length})`}</div>
               <div style={styles.cardGrid}>
@@ -396,6 +486,7 @@ export function RecapPanel({ uuid }: RecapPanelProps): React.ReactElement {
                 })}
               </div>
             </div>
+            )}
           </>
         )}
       </div>

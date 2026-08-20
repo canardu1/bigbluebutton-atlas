@@ -7,13 +7,14 @@ DeepSeek chat-completions API (OpenAI-compatible).
 Endpoints:
 - /chat   : contextual-chatbot plugin (student question + lesson context).
 - /recap  : lesson-recap plugin (full transcript + slides -> structured
-            summary, action items and flashcards).
+            summary, action items and flashcards in "lesson" mode, or
+            meeting minutes with decisions and owners in "meeting" mode).
 """
 from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -70,6 +71,8 @@ class RecapRequest(BaseModel):
     language: Optional[str] = None
     transcript: Optional[str] = None
     slides: Optional[str] = None
+    # "lesson" produces study material, "meeting" produces minutes.
+    mode: Literal["lesson", "meeting"] = "lesson"
 
 
 class Flashcard(BaseModel):
@@ -77,10 +80,24 @@ class Flashcard(BaseModel):
     answer: str
 
 
+class ActionItem(BaseModel):
+    text: str
+    owner: Optional[str] = None
+    due: Optional[str] = None
+
+
 class RecapReply(BaseModel):
     summary: str
-    actionItems: list[str]
+    actionItems: list[ActionItem]
     flashcards: list[Flashcard]
+    decisions: list[str] = []
+
+
+def _optional_str(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _clip(text: Optional[str], limit: int) -> str:
@@ -197,37 +214,69 @@ async def chat(req: ChatRequest) -> ChatReply:
     return ChatReply(answer=answer)
 
 
-def _build_recap_messages(req: RecapRequest) -> list[dict[str, str]]:
-    language = (req.language or "the same language as the lesson").strip()
+JSON_SHAPE = (
+    "Respond with a single JSON object and nothing else, using exactly this "
+    'shape: {"summary": string, "decisions": string[], "actionItems": '
+    '[{"text": string, "owner": string|null, "due": string|null}], '
+    '"flashcards": [{"question": string, "answer": string}]}. '
+)
 
-    system = (
-        "You are an assistant that produces study material from a recorded "
-        "online lesson. You are given the full transcript of what the teacher "
-        "said and the text extracted from the lesson slides. Produce a concise "
-        "recap that helps a student review the lesson. Base everything ONLY on "
-        "the provided transcript and slides; do not invent facts that are not "
-        "supported by them. "
-        f"Write all text in this language: {language}. "
-        "Respond with a single JSON object and nothing else, using exactly this "
-        "shape: {\"summary\": string, \"actionItems\": string[], "
-        "\"flashcards\": [{\"question\": string, \"answer\": string}]}. "
-        "The summary is a short paragraph (3-6 sentences). actionItems is a list "
-        "of concrete next steps, homework or things to study (use [] if none). "
-        "flashcards is a list of 3-8 question/answer pairs covering the key "
-        "concepts. Keep questions and answers short."
-    )
+LESSON_SYSTEM = (
+    "You are an assistant that produces study material from a recorded "
+    "online lesson. You are given the full transcript of what the teacher "
+    "said and the text extracted from the lesson slides. Produce a concise "
+    "recap that helps a student review the lesson. Base everything ONLY on "
+    "the provided transcript and slides; do not invent facts that are not "
+    "supported by them. "
+    "{language_instruction} "
+    + JSON_SHAPE
+    + "The summary is a short paragraph (3-6 sentences). actionItems is a list "
+    "of concrete next steps, homework or things to study (use [] if none); set "
+    "owner and due to null unless the teacher named them explicitly. decisions "
+    "is [] for a lesson. flashcards is a list of 3-8 question/answer pairs "
+    "covering the key concepts. Keep questions and answers short."
+)
+
+MEETING_SYSTEM = (
+    "You are an assistant that writes the minutes of a work meeting. You are "
+    "given the transcript of what the participants said and the text of any "
+    "shared slides. Base everything ONLY on the provided material; never "
+    "invent a decision, an owner or a deadline that was not stated. "
+    "{language_instruction} "
+    + JSON_SHAPE
+    + "The summary is a short paragraph (3-6 sentences) covering what the "
+    "meeting was about and where it landed. decisions is the list of decisions "
+    "actually taken, one short sentence each (use [] if none). actionItems is "
+    "the list of commitments: text is what has to be done, owner is the name of "
+    "the person who took it on (null if nobody was named), due is the deadline "
+    "exactly as stated, e.g. 'next Friday' or '2026-09-01' (null if none was "
+    "stated). flashcards is always [] for a meeting."
+)
+
+
+def _build_recap_messages(req: RecapRequest) -> list[dict[str, str]]:
+    is_meeting = req.mode == "meeting"
+    default_language = "the same language as the meeting" if is_meeting else "the same language as the lesson"
+    language = (req.language or default_language).strip()
+    language_instruction = f"Write all text in this language: {language}."
+
+    # Plain replace, not str.format: the prompt contains literal JSON braces.
+    template = MEETING_SYSTEM if is_meeting else LESSON_SYSTEM
+    system = template.replace("{language_instruction}", language_instruction)
 
     transcript = _clip(req.transcript, MAX_RECAP_CHARS)
     slides = _clip(req.slides, MAX_RECAP_CHARS)
 
     context_parts: list[str] = []
     if transcript:
-        context_parts.append(f"[Lesson transcript]\n{transcript}")
+        context_parts.append(f"[{'Meeting' if is_meeting else 'Lesson'} transcript]\n{transcript}")
     if slides:
         context_parts.append(f"[Slides text]\n{slides}")
     context_blob = "\n\n".join(context_parts)
 
-    user = f"Lesson material:\n{context_blob}\n\nGenerate the recap JSON now."
+    material_label = "Meeting material" if is_meeting else "Lesson material"
+    output_label = "minutes" if is_meeting else "recap"
+    user = f"{material_label}:\n{context_blob}\n\nGenerate the {output_label} JSON now."
 
     return [
         {"role": "system", "content": system},
@@ -259,11 +308,24 @@ def _parse_recap(content: str) -> RecapReply:
 
     summary = str(data.get("summary", "")).strip()
 
-    action_items: list[str] = []
+    decisions: list[str] = []
+    for decision in data.get("decisions") or []:
+        decision_str = str(decision).strip()
+        if decision_str:
+            decisions.append(decision_str)
+
+    action_items: list[ActionItem] = []
     for item in data.get("actionItems") or []:
-        item_str = str(item).strip()
-        if item_str:
-            action_items.append(item_str)
+        # The model may answer with a plain string (lesson style) or with an
+        # object carrying owner and deadline (meeting style).
+        if isinstance(item, dict):
+            text = str(item.get("text", "")).strip()
+            owner = _optional_str(item.get("owner"))
+            due = _optional_str(item.get("due"))
+        else:
+            text, owner, due = str(item).strip(), None, None
+        if text:
+            action_items.append(ActionItem(text=text, owner=owner, due=due))
 
     flashcards: list[Flashcard] = []
     for card in data.get("flashcards") or []:
@@ -274,12 +336,17 @@ def _parse_recap(content: str) -> RecapReply:
         if question and answer:
             flashcards.append(Flashcard(question=question, answer=answer))
 
-    if not summary and not action_items and not flashcards:
+    if not summary and not action_items and not flashcards and not decisions:
         raise HTTPException(
             status_code=502, detail="DeepSeek returned an empty recap."
         )
 
-    return RecapReply(summary=summary, actionItems=action_items, flashcards=flashcards)
+    return RecapReply(
+        summary=summary,
+        actionItems=action_items,
+        flashcards=flashcards,
+        decisions=decisions,
+    )
 
 
 @app.post("/recap", response_model=RecapReply)
