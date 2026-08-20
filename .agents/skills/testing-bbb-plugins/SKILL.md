@@ -11,27 +11,28 @@ we test the **real plugin component** in a demo harness that aliases the SDK to 
 mock (`demo/mock-sdk.tsx`) feeding live fake data, while talking to the **real**
 backend.
 
-> The demo harness (`demo/mock-sdk.tsx`, `webpack.demo.js`, `html-webpack-plugin`) is **not
-> committed** to the repo — it is scaffolding created per test run. Recreate it in the plugin
-> directory (gitignored / not committed) before following the steps below.
+The harness is committed: every plugin has `demo/` (mock SDK, page, fixture slide texts) and
+`webpack.demo.js`, plus an `npm run demo` script. No extra dependency is needed.
 
 ## General pattern (applies to any plugin here)
 
 1. `cd bbb-plugins/<plugin> && npm install`
 2. Sanity: `npx tsc --noEmit`, `npm run lint`, `npm run build-bundle` must all pass.
 3. Run the backend the plugin calls (see per-plugin notes below).
-4. Start the demo harness: `npx webpack serve --config webpack.demo.js`
+4. Start the demo harness: `npm run demo`
    (transcription-translation → port 4702, contextual-chatbot → port 4712,
    lesson-recap → port 4722).
 5. Open the port in Chrome, maximize the window, then record the run.
 
 The harness `webpack.demo.js` aliases `bigbluebutton-html-plugin-sdk` to
-`demo/mock-sdk.tsx`. The mock implements only the hooks the panel uses
+`demo/mock-sdk.tsx` (ts-loader `transpileOnly`, so SDK type-only exports need no
+real implementation). The mock implements only the hooks the panel uses
 (`useCustomSubscription`, `usePluginSettings`, `useCurrentUser`, `useMeetingData`,
-`useCurrentPresentation`, `useUiData`) and streams scripted captions/chat. To
-change context (language, presenter role, slide text), edit the mock's return
-values — e.g. `useUiData` returns `{ locale: 'it' }` to force Italian answers,
-`useCurrentUser` returns `presenter: true` to reveal teacher-only UI.
+`useCurrentPresentation`, `useUiData`), returns settings asynchronously like the
+real client, and streams scripted captions/chat. To change context, edit the
+constants at the top of the mock — e.g. `LOCALE = 'it'` forces Italian answers,
+`IS_PRESENTER = true` reveals teacher-only UI; slide text comes from the static
+`demo/slide*.txt` fixtures served by the dev server.
 
 ## contextual-chatbot (DeepSeek)
 
@@ -49,7 +50,8 @@ values — e.g. `useUiData` returns `{ locale: 'it' }` to force Italian answers,
   - Out-of-context Q ("capitale della Francia secondo la lezione?") → refuses / "non ho queste informazioni dalla lezione", NOT "Parigi".
   - Save teacher materials (e.g. "pagine 40-45"), then ask → answer cites 40-45 (proves `/materials` per-meeting merge).
   - Kill the proxy, ask → red bubble "The assistant is unreachable…", no crash.
-- Security check: `grep -RF "$DEEPSEEK_API_KEY" dist/ demo-dist/` must find nothing — the key must never be in a browser bundle.
+- Security check: `npm run build-bundle && npx webpack --config webpack.demo.js` then
+  `grep -RF "$DEEPSEEK_API_KEY" dist/ demo-dist/` must find nothing — the key must never be in a browser bundle.
 - The proxy's materials store is in-memory; restart uvicorn to reset it between runs.
 
 ## lesson-recap (DeepSeek)
@@ -74,8 +76,7 @@ values — e.g. `useUiData` returns `{ locale: 'it' }` to force Italian answers,
 ## Gotchas / future-proofing
 
 - `pip install -e .` creates a `*.egg-info/` dir — keep it gitignored; don't commit it.
-- The demo build uses `transpileOnly` (ts-loader), so SDK type-only exports in the
-  mock don't need real implementations.
+- `demo-dist/` is gitignored build output; the harness sources under `demo/` are committed.
 - If the answer comes back in the wrong language, check the mock's `useUiData`
   locale and the proxy's system prompt (`language` field), not the network layer.
 - Real BBB-server behaviors (nav-bar button, real captions, manifest load,

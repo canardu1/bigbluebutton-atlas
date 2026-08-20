@@ -2,3 +2,4 @@ node_modules/
 dist/
 dist-tsc/
 *.log
+demo-dist/
